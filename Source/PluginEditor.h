@@ -142,12 +142,19 @@ namespace thegrid::ui
 
         Page page = Page::step;
 
-        static constexpr float kPad = 58.0f, kGap = 6.0f, kGroup = 6.0f, kLabelW = 48.0f, kHeadH = 24.0f;
-        static constexpr int kW = 1096, kH = 530;   // the pads plus room on the right for the end mark and ties
+        // lane numbers (click to mute) down the left, the pads, then each lane's LENGTH down the right
+        static constexpr float kPad = 58.0f, kGap = 6.0f, kGroup = 6.0f, kLabelW = 48.0f, kHeadH = 24.0f, kLaneGap = 14.0f, kLaneW = 64.0f;
+        static constexpr int kW = 1162, kH = 530;
         static juce::Rectangle<float> cell (int s)
         {
             const int c = s % thegrid::kCols, r = s / thegrid::kCols;
             return { kLabelW + (float) c * (kPad + kGap) + (float) (c / 4) * kGroup, kHeadH + (float) r * (kPad + kGap), kPad, kPad };
+        }
+        static juce::Rectangle<float> laneLabel (int l) { const auto r = cell (l * thegrid::kCols); return { 0.0f, r.getY(), kLabelW - 8.0f, r.getHeight() }; }
+        static juce::Rectangle<float> laneLength (int l)
+        {
+            const auto r = cell (l * thegrid::kCols + thegrid::kCols - 1);
+            return { r.getRight() + kLaneGap, r.getY(), kLaneW, r.getHeight() };
         }
 
     private:
@@ -159,7 +166,12 @@ namespace thegrid::ui
 
         GridProcessor& proc;
         const Skin& skin;
-        int stepNow = -1, hover = -1, dragCell = -1, dragStartValue = 0, paintValue = 0;
+        void setLaneLength (int lane, int n);
+        int laneAt (juce::Point<float>, bool lengthStrip) const;
+
+        std::array<int, thegrid::kLanes> heads { -1, -1, -1, -1, -1, -1, -1, -1 };
+        int count = -1, hover = -1, dragCell = -1, dragStartValue = 0, paintValue = 0, laneDrag = -1, laneDragStart = 16;
+        juce::Point<float> mousePos;
         float dragStartY = 0.0f;
         bool painting = false, paintOn = true;
         uint32_t lastVersion = 0, lastNotes = 0, lastSteps = 0;

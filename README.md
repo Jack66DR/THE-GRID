@@ -2,8 +2,11 @@
 
 **manners! DSP** step sequencer. An Audio Unit MIDI effect (plus VST3), macOS universal (Apple Silicon and Intel).
 
-One track per instance. 128 steps on an 8 x 16 grid of pads, read like a page: row 1 is steps 1 to 16, row 2 is 17 to 32,
-and so on down. Every step carries its own locks: on or off, NOTE, VELOCITY, GATE, CHANCE, RATCHET and TIE.
+One track per instance, eight voices. The 8 x 16 grid is eight **lanes** of sixteen steps: every row is a voice with its
+own note on every step, and all eight play together, so a column can be a chord. Each lane has its own LENGTH, 1 to 16,
+so lanes of different lengths drift against each other, and each lane can be muted.
+
+Every step carries its own locks: on or off, NOTE, VELOCITY, GATE, CHANCE, RATCHET and TIE.
 Notes live in a key and scale, so changing KEY or SCALE takes the whole pattern with it.
 
 It follows Logic: tempo, time signature, cycle and wherever you drop the playhead.
@@ -21,7 +24,7 @@ sudo xattr -dr com.apple.quarantine "/Library/Audio/Plug-Ins/Components/THE GRID
 ```
 
 In Logic it goes in a Software Instrument track's **MIDI FX** slot (above the instrument slot): MIDI FX > Audio Units > manners! DSP > THE GRID.
-It plays whatever instrument is on that track. Press play. One GRID per track; give each its own LENGTH and they drift against each other.
+It plays whatever instrument is on that track (it's polyphonic, so give it a polyphonic instrument for chords). Press play.
 
 ## The pads
 
@@ -33,20 +36,22 @@ It plays whatever instrument is on that track. Press play. One GRID per track; g
 | **GATE** page | Drag for note length, 5 to 100 % of the step. |
 | **CHANCE** page | Drag for the chance the step plays, in fives. |
 | **RATCHET** page | Drag for 1 to 8 hits inside the step. |
-| **TIE** page | Click to tie a step into the next. Same note: one long note. Different note: legato. Empty next step: it holds through it. |
+| **TIE** page | Click to tie a step into the next one in its lane. Same note: one long note. Different note: legato. Empty next step: it holds through it. |
 | Any value page | Clicking an off step turns it on. Double-click resets that lock. Scroll to nudge. Shift-drag paints the first pad's value across the others. |
 | Cmd-click | Step on or off, on any page. |
-| Alt-click | The pattern ends here (sets LENGTH). |
+| Alt-click | This lane ends here (sets its LENGTH). |
+| Lane number (left) | Click to mute or unmute the lane. |
+| LEN (right) | That lane's length, 1 to 16. Drag or scroll; double-click for 16. |
 
 Locks that aren't plain show on every page: a coral dot for CHANCE under 100, a small x for RATCHET, a coral edge for TIE.
-The coral bracket marks where the pattern ends. The lit pad is the playhead; the lit column and row numbers say where it is.
+A coral bracket marks where a shorter lane ends. Each lane has its own lit pad for its playhead; the lit number along the top is the master count.
 
 ## Patterns
 
 | Control | What it does |
 |---|---|
 | 1 to 8 | Eight patterns. Click to edit; while playing, a new one takes over on the next bar line. Automatable as PATTERN. |
-| LENGTH | 1 to 128 steps, per pattern. Drag or scroll; double-click for 16. |
+| ALL LENGTHS | Sets every lane's length at once. Shows POLYMETRIC when the lanes differ. |
 | COPY, PASTE, CLEAR, SAVE, LOAD | Per pattern. CLEAR wants two clicks. Files are `.grid`, in Music > THE GRID Patterns by default. |
 
 ## Key
@@ -60,10 +65,10 @@ The coral bracket marks where the pattern ends. The lit pad is the playhead; the
 | Control | What it does |
 |---|---|
 | RATE | One step is 1/1 to 1/32, with triplets and dotted values. |
-| DIR | FWD, BWD, PEND (bounce), RAND (anywhere), BROWN (a random walk: mostly forward, sometimes back, now and then a stumble or a leap). |
+| DIR | For every lane: FWD, BWD, PEND (bounce), RAND (anywhere), BROWN (a random walk: mostly forward, sometimes back, now and then a stumble or a leap). Each lane rolls its own dice. |
 | SKIP | FWD, BWD and PEND sometimes jump a step. 0 to 100 %. |
 | SWING | 50 % is straight; up to 75 % pushes every second step late. |
-| RESET | NEVER, or start again from step 1 every 1, 2, 4 or 8 bars. |
+| RESET | NEVER, or every lane starts again from step 1 every 1, 2, 4 or 8 bars. |
 | SEED | FREE: RAND, BROWN, SKIP and CHANCE roll new dice every pass. LOCKED: the same every time the song passes the same point, so a bounce matches what you heard. |
 
 ## Output
@@ -80,7 +85,7 @@ The coral bracket marks where the pattern ends. The lit pad is the playhead; the
 Configure with `-DTHEGRID_BUILD_TESTS=ON` to also build:
 
 - `THEGRID_Test`: the offline engine checks (CI runs this).
-- `THEGRID_Tool midi out.mid [starter|brown|long]`: 8 bars at 110 BPM through the full plugin, as a MIDI file you can drag into Logic.
+- `THEGRID_Tool midi out.mid [starter|brown|busy]`: 8 bars at 110 BPM through the full plugin, as a MIDI file you can drag into Logic.
 - `THEGRID_Tool snapshot out.png [step|note|vel|gate|chance|ratchet|tie|boot]`: renders the editor.
 
 Inspired by the way grid sequencers like the Squarp Hapax work; THE GRID is its own design.

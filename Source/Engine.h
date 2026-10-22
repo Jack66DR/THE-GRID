@@ -1,7 +1,8 @@
 // THE GRID engine: a Hapax-style step sequencer. Header only, no JUCE, so the offline test can drive it directly.
 //
-// One track per instance. A pattern is up to 128 steps, laid out on the 8 x 16 grid as eight rows of sixteen:
-// row 1 is steps 1 to 16, row 2 is 17 to 32, and so on. LENGTH says where the pattern ends.
+// One track per instance, eight voices. The 8 x 16 grid is eight LANES of sixteen steps: each row is a voice with its
+// own note on every step, and all eight play together, so a column can be a chord. Each lane has its own LENGTH
+// (1 to 16), so lanes of different lengths drift against each other, and can be muted.
 //
 // Every step carries its own locks: ON, NOTE (in the key and scale), VELOCITY, GATE, CHANCE, RATCHET and TIE.
 //
@@ -22,7 +23,8 @@ namespace thegrid
 {
     constexpr int kRows = 8;
     constexpr int kCols = 16;
-    constexpr int kSteps = kRows * kCols;   // 128
+    constexpr int kLanes = kRows;           // eight voices
+    constexpr int kSteps = kRows * kCols;   // 128 cells: lane * 16 + step
     constexpr int kPatterns = 8;
     constexpr int kMaxNote = 48;            // four octaves above the root
     constexpr int kMaxRatchet = 8;
@@ -114,7 +116,7 @@ namespace thegrid
     struct Pattern
     {
         std::array<std::array<std::atomic<uint8_t>, kPatterns * kSteps>, kNumLocks> v {};
-        std::array<std::atomic<uint8_t>, kPatterns> len {};
+        std::array<std::atomic<uint8_t>, kPatterns * kLanes> len {}, mute {};
         std::atomic<uint32_t> version { 0 };
 
         Pattern()
@@ -130,41 +132,55 @@ namespace thegrid
             v[(size_t) l][at (p, s)].store ((uint8_t) std::clamp (value, kLockMin[l], kLockMax[l]), std::memory_order_relaxed);
         }
         bool on (int p, int s) const { return get (lkOn, p, s) != 0; }
-        int length (int p) const { return std::clamp ((int) len[(size_t) std::clamp (p, 0, kPatterns - 1)].load (std::memory_order_relaxed), 1, kSteps); }
-        void setLength (int p, int n) { len[(size_t) std::clamp (p, 0, kPatterns - 1)].store ((uint8_t) std::clamp (n, 1, kSteps), std::memory_order_relaxed); }
+        static size_t lane (int p, int l) { return (size_t) (std::clamp (p, 0, kPatterns - 1) * kLanes + std::clamp (l, 0, kLanes - 1)); }
+        static int cell (int l, int step) { return l * kCols + step; }
+        int length (int p, int l) const { return std::clamp ((int) len[lane (p, l)].load (std::memory_order_relaxed), 1, kCols); }
+        void setLength (int p, int l, int n) { len[lane (p, l)].store ((uint8_t) std::clamp (n, 1, kCols), std::memory_order_relaxed); }
+        bool muted (int p, int l) const { return mute[lane (p, l)].load (std::memory_order_relaxed) != 0; }
+        void setMute (int p, int l, bool m) { mute[lane (p, l)].store (m ? 1 : 0, std::memory_order_relaxed); }
+
+        // A fresh lane's note: the top row highest, the bottom row the root.
+        static int laneNote (int l) { static constexpr int n[kLanes] = { 24, 19, 15, 12, 10, 7, 3, 0 }; return n[std::clamp (l, 0, kLanes - 1)]; }
+        static int defaultFor (Lock lk, int s) { return lk == lkNote ? laneNote (s / kCols) : kLockDef[lk]; }
 
         void clearStep (int p, int s)
         {
-            for (int l = 0; l < kNumLocks; ++l) set ((Lock) l, p, s, kLockDef[l]);
+            for (int l = 0; l < kNumLocks; ++l) set ((Lock) l, p, s, defaultFor ((Lock) l, s));
         }
 
-        // An empty pattern, sixteen steps long.
+        // An empty pattern: every lane sixteen steps, none muted.
         void clear (int p)
         {
             for (int s = 0; s < kSteps; ++s) clearStep (p, s);
-            setLength (p, 16);
+            for (int l = 0; l < kLanes; ++l) { setLength (p, l, 16); setMute (p, l, false); }
             ++version;
         }
 
-        // Something to hear on the first press of play: a little minor riff with a tie, a ratchet and a maybe.
+        // Something to hear on the first press of play: a bass line, a two-note pad that changes on the bar,
+        // a ratchet, a maybe, and a top lane seven steps long that drifts against the rest.
         void starter (int p)
         {
             clear (p);
-            struct S { int step, note, vel, gate, chance, ratchet, tie; };
-            static constexpr S riff[] = {
-                { 0, 12, 110, 60, 100, 1, 0 }, { 3, 19, 90, 40, 100, 1, 0 }, { 6, 15, 100, 50, 100, 1, 1 },
-                { 7, 15, 100, 50, 100, 1, 0 }, { 10, 22, 80, 30, 50, 1, 0 }, { 12, 12, 100, 50, 100, 3, 0 },
-                { 14, 24, 95, 40, 100, 1, 0 } };
-            for (auto& r : riff)
+            struct S { int lane, step, note, vel, gate, chance, ratchet, tie; };
+            static constexpr S cells[] = {
+                { 7, 0, 0, 110, 60, 100, 1, 0 }, { 7, 3, 0, 90, 40, 100, 1, 0 }, { 7, 6, 7, 100, 50, 100, 1, 1 },
+                { 7, 7, 7, 100, 50, 100, 1, 0 }, { 7, 10, 3, 80, 30, 50, 1, 0 }, { 7, 12, 0, 100, 50, 100, 3, 0 },
+                { 7, 14, 10, 95, 40, 100, 1, 0 },
+                { 5, 0, 12, 70, 95, 100, 1, 1 }, { 5, 8, 10, 70, 95, 100, 1, 1 },
+                { 4, 0, 15, 65, 95, 100, 1, 1 }, { 4, 8, 14, 65, 95, 100, 1, 1 },
+                { 0, 0, 31, 60, 30, 100, 1, 0 }, { 0, 2, 27, 55, 30, 100, 1, 0 }, { 0, 5, 26, 50, 30, 60, 1, 0 } };
+            for (auto& c : cells)
             {
-                set (lkOn, p, r.step, 1);
-                set (lkNote, p, r.step, r.note);
-                set (lkVel, p, r.step, r.vel);
-                set (lkGate, p, r.step, r.gate);
-                set (lkChance, p, r.step, r.chance);
-                set (lkRatchet, p, r.step, r.ratchet);
-                set (lkTie, p, r.step, r.tie);
+                const int s = cell (c.lane, c.step);
+                set (lkOn, p, s, 1);
+                set (lkNote, p, s, c.note);
+                set (lkVel, p, s, c.vel);
+                set (lkGate, p, s, c.gate);
+                set (lkChance, p, s, c.chance);
+                set (lkRatchet, p, s, c.ratchet);
+                set (lkTie, p, s, c.tie);
             }
+            setLength (p, 0, 7);
             ++version;
         }
 
@@ -174,7 +190,7 @@ namespace thegrid
             for (int l = 0; l < kNumLocks; ++l)
                 for (int s = 0; s < kSteps; ++s)
                     set ((Lock) l, to, s, get ((Lock) l, from, s));
-            setLength (to, length (from));
+            for (int l = 0; l < kLanes; ++l) { setLength (to, l, length (from, l)); setMute (to, l, muted (from, l)); }
             ++version;
         }
     };
@@ -231,8 +247,7 @@ namespace thegrid
             wasRunning = false;
             qn = 0;
             sounding.fill (0);
-            heldTie = -1;
-            walkValid = false;
+            for (auto& ln : lanes) ln = {};
         }
 
         // A per-instance number mixed into FREE randomness, so two GRIDs don't roll the same dice.
@@ -266,8 +281,8 @@ namespace thegrid
                 allOff (now);
                 expectedPpq = -1.0e9;
                 lastId = INT64_MIN;
-                walkValid = false;
-                uiStep = -1;
+                for (auto& ln : lanes) ln.walkValid = false;
+                for (auto& u : uiStep) u = -1;
             }
             if (running && ! wasRunning)
                 ++pass;
@@ -348,7 +363,8 @@ namespace thegrid
         }
 
         // the editor's view
-        std::atomic<int> uiStep { -1 }, uiNote { -1 }, uiSlot { 0 }, uiBar { 1 }, uiBeat { 1 }, uiTranspose { 0 };
+        std::array<std::atomic<int>, kLanes> uiStep { -1, -1, -1, -1, -1, -1, -1, -1 };   // where each lane's playhead is
+        std::atomic<int> uiNote { -1 }, uiSlot { 0 }, uiBar { 1 }, uiBeat { 1 }, uiTranspose { 0 }, uiCount { -1 };
         std::atomic<uint32_t> uiNotes { 0 }, uiSteps { 0 };   // bumped on every note, and every step the playhead lands on
         std::atomic<bool> uiPlaying { false };
         std::atomic<float> uiBpm { 120.0f };
@@ -409,103 +425,122 @@ namespace thegrid
             }
         }
 
-        void walkStart (int L, int dir)
+        struct Lane
         {
-            walkPos = dir == dirBwd ? L - 1 : 0;
-            walkSign = 1;
+            bool walkValid = false;
+            int64_t walkCount = 0;
+            int walkPos = 0, walkSign = 1;
+            int heldTie = -1;      // a tied note waiting to see what the next step does
+            uint32_t heldId = 0;
+        };
+
+        static void walkStart (Lane& ln, int L, int dir)
+        {
+            ln.walkPos = dir == dirBwd ? L - 1 : 0;
+            ln.walkSign = 1;
         }
 
-        void walkAdvance (int64_t c, int L, const Params& p, uint64_t s)
+        static void walkAdvance (Lane& ln, int64_t c, int L, const Params& p, uint64_t s, int lane)
         {
-            const uint64_t h = hash3 (c, s, 0xB0);
-            walkPos = (int) mod (walkPos, L);
+            const uint64_t h = hash3 (c, s, (uint64_t) 0xB0 + (uint64_t) lane * (uint64_t) 0x1000193);
+            ln.walkPos = (int) mod (ln.walkPos, L);
             if (p.dir == dirBrown)
             {
                 // mostly forward, sometimes back, now and then a stumble or a leap
                 const int r = (int) (h % 100);
                 const int d = r < 30 ? -1 : r < 40 ? 0 : r < 90 ? 1 : 2;
-                walkPos = (int) mod (walkPos + d, L);
+                ln.walkPos = (int) mod (ln.walkPos + d, L);
                 return;
             }
             const int moves = ((int) ((h >> 16) % 100) < std::clamp (p.skip, 0, 100)) ? 2 : 1;
             for (int m = 0; m < moves; ++m)
             {
-                if (p.dir == dirBwd) walkPos = (int) mod (walkPos - 1, L);
+                if (p.dir == dirBwd) ln.walkPos = (int) mod (ln.walkPos - 1, L);
                 else if (p.dir == dirPend)
                 {
-                    if (L == 1) { walkPos = 0; continue; }
-                    if (walkPos + walkSign < 0 || walkPos + walkSign > L - 1) walkSign = -walkSign;
-                    walkPos += walkSign;
+                    if (L == 1) { ln.walkPos = 0; continue; }
+                    if (ln.walkPos + ln.walkSign < 0 || ln.walkPos + ln.walkSign > L - 1) ln.walkSign = -ln.walkSign;
+                    ln.walkPos += ln.walkSign;
                 }
-                else walkPos = (int) mod (walkPos + 1, L);
+                else ln.walkPos = (int) mod (ln.walkPos + 1, L);
             }
         }
 
-        int position (int64_t c, int L, const Params& p)
+        int position (int64_t c, int L, const Params& p, int lane)
         {
-            const uint64_t s = salt (p);
+            auto& ln = lanes[(size_t) lane];
+            const uint64_t s = salt (p) + (uint64_t) lane * (uint64_t) 0x9E3779B1;
             const bool walks = p.dir == dirBrown || (p.skip > 0 && p.dir != dirRand);
             if (! walks || c < 0)
             {
-                walkValid = false;
+                ln.walkValid = false;
                 return closedForm (c, L, p.dir, s);
             }
-            if (walkValid && c == walkCount)
-                return (int) mod (walkPos, L);
-            if (walkValid && c == walkCount + 1)
-                walkAdvance (c, L, p, s);
+            if (ln.walkValid && c == ln.walkCount)
+                return (int) mod (ln.walkPos, L);
+            if (ln.walkValid && c == ln.walkCount + 1)
+                walkAdvance (ln, c, L, p, s, lane);
             else if (c == 0)
-                walkStart (L, p.dir);
+                walkStart (ln, L, p.dir);
             else if (p.seed == 1 && c <= (1 << 20))
             {
                 // LOCKED: replay the walk from the start so the same bar always walks the same way
-                walkStart (L, p.dir);
+                walkStart (ln, L, p.dir);
                 for (int64_t k = 1; k <= c; ++k)
-                    walkAdvance (k, L, p, s);
+                    walkAdvance (ln, k, L, p, s, lane);
             }
-            else if (! walkValid)
-                walkStart (L, p.dir);
+            else if (! ln.walkValid)
+                walkStart (ln, L, p.dir);
             else
-                walkAdvance (c, L, p, s);   // FREE after a jump or a cycle: carry on from where it was
-            walkCount = c;
-            walkValid = true;
-            return (int) mod (walkPos, L);
+                walkAdvance (ln, c, L, p, s, lane);   // FREE after a jump or a cycle: carry on from where it was
+            ln.walkCount = c;
+            ln.walkValid = true;
+            return (int) mod (ln.walkPos, L);
         }
 
-        // ---- one step
+        // ---- one tick: every lane takes its step
         void step (int64_t T, int64_t c, double interval, const Params& p, const Pattern& pat)
         {
-            const int s = activeSlot;
-            const int L = pat.length (s);
-            const int pos = position (c, L, p);
-            uiStep = pos;
+            uiCount = (int) mod (c, kCols);
+            for (int l = 0; l < kLanes; ++l)
+                stepLane (T, c, interval, p, pat, l);
             uiSteps.fetch_add (1, std::memory_order_release);
+        }
 
-            bool plays = pat.on (s, pos);
+        void stepLane (int64_t T, int64_t c, double interval, const Params& p, const Pattern& pat, int lane)
+        {
+            auto& ln = lanes[(size_t) lane];
+            const int s = activeSlot;
+            const int L = pat.length (s, lane);
+            const int pos = position (c, L, p, lane);
+            const int cell = Pattern::cell (lane, pos);
+            uiStep[(size_t) lane] = pos;
+
+            bool plays = pat.on (s, cell) && ! pat.muted (s, lane);
             if (plays)
             {
-                const int chance = pat.get (lkChance, s, pos);
+                const int chance = pat.get (lkChance, s, cell);
                 if (chance < 100)
-                    plays = chance > 0 && (int) (hash3 (c, salt (p), (uint64_t) pos + 0xC4A) % 100) < chance;
+                    plays = chance > 0 && (int) (hash3 (c, salt (p), (uint64_t) cell + 0xC4A) % 100) < chance;
             }
 
             if (! plays)
             {
                 // a tied note holds over an empty step, then lets go at its end
-                if (heldTie >= 0)
+                if (ln.heldTie >= 0)
                 {
-                    queue (T + std::max<int64_t> (1, std::llround (interval)), heldTie, 0, false, heldId);
-                    heldTie = -1;
+                    queue (T + std::max<int64_t> (1, std::llround (interval)), ln.heldTie, 0, false, ln.heldId);
+                    ln.heldTie = -1;
                 }
                 return;
             }
 
             const int root = 12 * (std::clamp (p.octave, 0, 6) + 2) + std::clamp (p.key, 0, 11);   // Logic: C2 is MIDI 48
-            const int note = std::clamp (root + quantise (pat.get (lkNote, s, pos), p.scale) + transpose, 0, 127);
-            const int vel = pat.get (lkVel, s, pos);
-            const double gate = pat.get (lkGate, s, pos) / 100.0;
-            const int ratchet = pat.get (lkRatchet, s, pos);
-            const bool tie = pat.get (lkTie, s, pos) != 0;
+            const int note = std::clamp (root + quantise (pat.get (lkNote, s, cell), p.scale) + transpose, 0, 127);
+            const int vel = pat.get (lkVel, s, cell);
+            const double gate = pat.get (lkGate, s, cell) / 100.0;
+            const int ratchet = pat.get (lkRatchet, s, cell);
+            const bool tie = pat.get (lkTie, s, cell) != 0;
             const double sub = interval / ratchet;
             const int64_t minLen = std::max<int64_t> (1, (int64_t) std::llround (0.004 * sr));
 
@@ -514,17 +549,17 @@ namespace thegrid
                 const int64_t ti = T + (int64_t) std::llround (i * sub);
                 const bool last = i == ratchet - 1;
                 uint32_t id = ++nextId == 0 ? ++nextId : nextId;
-                if (i == 0 && heldTie >= 0)
+                if (i == 0 && ln.heldTie >= 0)
                 {
-                    if (heldTie == note && ratchet == 1)
-                        id = heldId;   // the tie carries on into this step: no new note, this step's gate and tie take over
+                    if (ln.heldTie == note && ratchet == 1)
+                        id = ln.heldId;   // the tie carries on into this step: no new note, this step's gate and tie take over
                     else
                     {
                         // legato: the new note starts, the held one lets go a sample later
                         emitNow (ti, note, vel, true, id);
-                        if (heldTie != note) queue (ti + 1, heldTie, 0, false, heldId);
+                        if (ln.heldTie != note) queue (ti + 1, ln.heldTie, 0, false, ln.heldId);
                     }
-                    heldTie = -1;
+                    ln.heldTie = -1;
                 }
                 else if (i == 0)
                     emitNow (ti, note, vel, true, id);
@@ -533,8 +568,8 @@ namespace thegrid
 
                 if (last && tie)
                 {
-                    heldTie = note;
-                    heldId = id;
+                    ln.heldTie = note;
+                    ln.heldId = id;
                 }
                 else
                     queue (ti + std::max (minLen, (int64_t) std::llround (sub * gate)), note, 0, false, id);
@@ -543,7 +578,7 @@ namespace thegrid
             uiNote = note;
             uiNotes.fetch_add (1, std::memory_order_release);
             if (log != nullptr && log->count < (int) log->ev.size())
-                log->ev[(size_t) log->count++] = { T, note, vel, pos, true };
+                log->ev[(size_t) log->count++] = { T, note, vel, cell, true };
         }
 
         // ---- note bookkeeping: a small queue of what's coming, and which notes are sounding
@@ -609,7 +644,7 @@ namespace thegrid
         void allOff (int64_t t)
         {
             qn = 0;
-            heldTie = -1;
+            for (auto& ln : lanes) ln.heldTie = -1;
             for (int nt = 0; nt < 128; ++nt)
                 if (sounding[(size_t) nt] != 0)
                 {
@@ -641,12 +676,8 @@ namespace thegrid
         std::array<Ev, 1024> q {};
         int qn = 0;
         std::array<uint32_t, 128> sounding {};   // the id of the note sounding on each key, 0 for none
-        int heldTie = -1;
-        uint32_t heldId = 0, nextId = 0;
-
-        bool walkValid = false;
-        int64_t walkCount = 0;
-        int walkPos = 0, walkSign = 1;
+        uint32_t nextId = 0;
+        std::array<Lane, kLanes> lanes {};
 
         NoteOut* outBuf = nullptr;
         int numOut = 0, outMax = 0, blockLen = 1;

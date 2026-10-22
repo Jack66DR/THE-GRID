@@ -135,7 +135,7 @@ int main()
     {
         Run r;
         r.seconds = 1.0;
-        r.pattern = [] (Pattern& p) { sixteen (p); p.setLength (0, 4); };
+        r.pattern = [] (Pattern& p) { sixteen (p); p.setLength (0, 0, 4); };
         check (run (r).steps() == seq ({ 0, 1, 2, 3, 0, 1, 2, 3 }), "LENGTH 4 wraps after four");
 
         Run b = r; b.setup = [] (Params& p) { p.dir = dirBwd; };
@@ -152,14 +152,49 @@ int main()
         Run sk; sk.seconds = 1.0; sk.pattern = sixteen; sk.setup = [] (Params& p) { p.skip = 100; };
         check (run (sk).steps() == seq ({ 0, 2, 4, 6, 8, 10, 12, 14 }), "SKIP 100 jumps every step");
 
-        Run big; big.seconds = 9.0; big.pattern = [] (Pattern& p) { for (int s = 0; s < kSteps; ++s) p.set (lkOn, 0, s, 1); p.setLength (0, 128); };
-        auto bl = run (big).steps();
-        check (bl.size() == 72 && bl[71] == 71, "a 128-step pattern runs past the first row");
 
-        Run rs; rs.seconds = 4.0; rs.pattern = [] (Pattern& p) { sixteen (p); p.setLength (0, 12); };
+        Run rs; rs.seconds = 4.0; rs.pattern = [] (Pattern& p) { sixteen (p); p.setLength (0, 0, 12); };
         rs.setup = [] (Params& p) { p.reset = 1; };
         auto rl = run (rs).steps();
         check (rl.size() == 32 && rl[12] == 0 && rl[15] == 3 && rl[16] == 0, "RESET 1 BAR starts a 12-step pattern again on the bar");
+    }
+
+    std::printf ("lanes\n");
+    {
+        Run ch; ch.seconds = 0.2;
+        ch.pattern = [] (Pattern& p) { for (int l : { 0, 3, 7 }) p.set (lkOn, 0, Pattern::cell (l, 0), 1); };
+        auto o = run (ch);
+        auto ons = o.ons();
+        check (ons.size() == 3 && ons[0].sample == 0 && ons[1].sample == 0 && ons[2].sample == 0, "three lanes on step 1 play a chord");
+        check (ons.size() == 3 && ons[0].note == 72 && ons[2].note == 48, "a fresh lane's note: top row highest, bottom row the root");
+        check (tidy (o), "a chord lets go cleanly");
+
+        Run pm; pm.seconds = 2.0;
+        pm.pattern = [] (Pattern& p)
+        {
+            for (int s = 0; s < 16; ++s) { p.set (lkOn, 0, Pattern::cell (0, s), 1); p.set (lkOn, 0, Pattern::cell (1, s), 1); }
+            p.setLength (0, 0, 3);
+            p.setLength (0, 1, 4);
+        };
+        std::vector<int> a, b;
+        for (auto c : run (pm).steps()) (c < 16 ? a : b).push_back (c % 16);
+        check (a.size() == 16 && b.size() == 16 && a[3] == 0 && a[5] == 2 && b[3] == 3 && b[4] == 0 && b[12] == 0,
+               "lanes 3 and 4 long drift against each other");
+
+        Run mu; mu.seconds = 0.5;
+        mu.pattern = [] (Pattern& p) { p.set (lkOn, 0, Pattern::cell (0, 0), 1); p.set (lkOn, 0, Pattern::cell (1, 0), 1); p.setMute (0, 1, true); };
+        auto mo = run (mu).steps();
+        check (mo == seq ({ 0 }), "a muted lane stays quiet");
+
+        Run tl; tl.seconds = 0.5;
+        tl.pattern = [] (Pattern& p)
+        {
+            p.set (lkOn, 0, Pattern::cell (0, 0), 1); p.set (lkTie, 0, Pattern::cell (0, 0), 1);
+            p.set (lkOn, 0, Pattern::cell (1, 1), 1); p.set (lkNote, 0, Pattern::cell (1, 1), 0);
+        };
+        auto to = run (tl);
+        check (to.rawOns().size() == 2 && to.raw.size() >= 4 && to.raw[3].note == 72 && to.raw[3].offset == 2 * six,
+               "a tie in one lane isn't broken by a note in another");
     }
 
     std::printf ("locks\n");
@@ -201,7 +236,7 @@ int main()
         diff.pattern = [] (Pattern& p) { for (int s : { 0, 1 }) p.set (lkOn, 0, s, 1); p.set (lkNote, 0, 1, 7); p.set (lkTie, 0, 0, 1); };
         auto d = run (diff);
         bool legato = d.raw.size() >= 3 && d.raw[1].on && d.raw[1].offset == six && ! d.raw[2].on && d.raw[2].offset == six + 1
-                      && d.raw[2].note == 60;
+                      && d.raw[2].note == 72;
         check (legato && tidy (d), "TIE into a different note: the new one starts before the old one lets go");
 
         Run gap; gap.seconds = 0.5;
@@ -245,7 +280,7 @@ int main()
         for (size_t i = 0; loops && i < st.size(); ++i) loops = st[i] == (int) (i % 8);
         check (loops && tidy (o, true), "a two-beat cycle plays steps 1 to 8 over and over");
 
-        Run sp; sp.seconds = 1.0; sp.pattern = [] (Pattern& p) { p.set (lkOn, 0, 0, 1); p.set (lkTie, 0, 0, 1); p.setLength (0, 1); };
+        Run sp; sp.seconds = 1.0; sp.pattern = [] (Pattern& p) { p.set (lkOn, 0, 0, 1); p.set (lkTie, 0, 0, 1); p.setLength (0, 0, 1); };
         sp.stopAt = 0.3;
         check (tidy (run (sp)), "stopping lets go of a held tie");
 

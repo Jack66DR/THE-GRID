@@ -229,24 +229,32 @@ void Field::mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetai
 //==============================================================================
 LengthField::LengthField (GridProcessor& p) : proc (p)
 {
-    setTooltip ("PATTERN LENGTH: DRAG UP OR DOWN, OR SCROLL. DOUBLE-CLICK FOR 16. ALT-CLICK A PAD SETS IT TOO");
+    setTooltip ("EVERY LANE'S LENGTH AT ONCE: DRAG OR SCROLL. DOUBLE-CLICK FOR 16. EACH LANE HAS ITS OWN ON THE RIGHT OF ITS ROW");
+}
+
+// what every lane agrees on, or 0 when they don't
+static int commonLength (GridProcessor& proc)
+{
+    const int p = proc.editPattern();
+    const int first = proc.pattern.length (p, 0);
+    for (int l = 1; l < thegrid::kLanes; ++l)
+        if (proc.pattern.length (p, l) != first) return 0;
+    return first;
 }
 
 void LengthField::tick()
 {
-    const int l = proc.pattern.length (proc.editPattern());
+    const int l = commonLength (proc);
     if (l != shown) { shown = l; repaint(); }
 }
 
 void LengthField::setLen (int n)
 {
     const int p = proc.editPattern();
-    n = juce::jlimit (1, thegrid::kSteps, n);
-    if (n != proc.pattern.length (p))
-    {
-        proc.pattern.setLength (p, n);
-        proc.patternEdited();
-    }
+    n = juce::jlimit (1, thegrid::kCols, n);
+    for (int l = 0; l < thegrid::kLanes; ++l)
+        proc.pattern.setLength (p, l, n);
+    proc.patternEdited();
     tick();
 }
 
@@ -259,21 +267,25 @@ void LengthField::paint (juce::Graphics& g)
         g.fillRect (r);
     }
     glowBox (g, r, 1.2f, col::coral, 0.75f);
-    glowText (g, "LENGTH", r.reduced (10.0f, 0.0f), juce::Justification::centredLeft,
+    glowText (g, "ALL LENGTHS", r.reduced (10.0f, 0.0f), juce::Justification::centredLeft,
               mono (12.0f).withExtraKerningFactor (0.12f), col::coral, 0.7f);
-    const int l = proc.pattern.length (proc.editPattern());
-    const juce::String txt = juce::String (l) + " STEPS" + (l % 16 == 0 ? "  (" + juce::String (l / 16) + (l == 16 ? " ROW)" : " ROWS)") : juce::String());
-    glowText (g, txt, r.reduced (10.0f, 0.0f), juce::Justification::centredRight,
+    const int l = commonLength (proc);
+    glowText (g, l > 0 ? juce::String (l) + " STEPS" : juce::String ("POLYMETRIC"), r.reduced (10.0f, 0.0f), juce::Justification::centredRight,
               mono (15.0f).withExtraKerningFactor (0.06f), col::coral);
 }
 
-void LengthField::mouseDown (const juce::MouseEvent&) { dragStart = proc.pattern.length (proc.editPattern()); }
-void LengthField::mouseDrag (const juce::MouseEvent& e) { setLen (dragStart + juce::roundToInt ((float) -e.getDistanceFromDragStartY() / 6.0f)); }
+void LengthField::mouseDown (const juce::MouseEvent&)
+{
+    dragStart = commonLength (proc);
+    if (dragStart == 0) dragStart = proc.pattern.length (proc.editPattern(), 0);
+}
+void LengthField::mouseDrag (const juce::MouseEvent& e) { setLen (dragStart + juce::roundToInt ((float) -e.getDistanceFromDragStartY() / 10.0f)); }
 void LengthField::mouseDoubleClick (const juce::MouseEvent&) { setLen (16); }
 void LengthField::mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& w)
 {
-    if (std::abs (w.deltaY) > 0.0f)
-        setLen (proc.pattern.length (proc.editPattern()) + (w.deltaY > 0.0f ? 1 : -1));
+    if (std::abs (w.deltaY) <= 0.0f) return;
+    const int base = commonLength (proc) > 0 ? commonLength (proc) : proc.pattern.length (proc.editPattern(), 0);
+    setLen (base + (w.deltaY > 0.0f ? 1 : -1));
 }
 
 //==============================================================================
@@ -281,7 +293,7 @@ void Display::tick()
 {
     auto& e = proc.engine;
     const int nb = e.uiBar.load(), nbeat = e.uiBeat.load(), ns = e.uiSlot.load(), nw = proc.editPattern(), nn = e.uiNote.load(),
-              nt = e.uiTranspose.load(), nst = e.uiStep.load(), nl = proc.pattern.length (e.uiSlot.load());
+              nt = e.uiTranspose.load(), nst = e.uiCount.load(), nl = thegrid::kCols;
     const uint32_t nc = e.uiNotes.load();
     const bool np = e.uiPlaying.load();
     if (nc != notes) flash = 1.0f;
@@ -309,9 +321,9 @@ void Display::paint (juce::Graphics& g)
 
     auto st = in.removeFromLeft (150.0f);
     glowText (g, "STEP", st.removeFromTop (16.0f), juce::Justification::centredLeft, small, col::coral, 0.7f);
-    glowText (g, playing && stepNow >= 0 ? juce::String (stepNow + 1).paddedLeft ('0', 3) : juce::String ("---"), st,
+    glowText (g, playing && stepNow >= 0 ? juce::String (stepNow + 1).paddedLeft ('0', 2) : juce::String ("--"), st,
               juce::Justification::centredLeft, mono (34.0f), col::coral);
-    glowText (g, "/" + juce::String (len), st.withTrimmedLeft (78.0f).withTrimmedTop (10.0f), juce::Justification::centredLeft,
+    glowText (g, "/" + juce::String (len), st.withTrimmedLeft (58.0f).withTrimmedTop (10.0f), juce::Justification::centredLeft,
               mono (15.0f), col::coral, 0.7f);
 
     auto nt = in.removeFromLeft (124.0f);
@@ -415,8 +427,14 @@ void PadGrid::tick()
     params = np;
     const uint32_t v = proc.pattern.version.load();
     if (v != lastVersion) { lastVersion = v; dirty = true; }
-    const int st = proc.engine.uiPlaying.load() ? proc.engine.uiStep.load() : -1;
-    if (st != stepNow) { stepNow = st; dirty = true; }
+    const bool playing = proc.engine.uiPlaying.load();
+    for (int l = 0; l < thegrid::kLanes; ++l)
+    {
+        const int h = playing ? proc.engine.uiStep[(size_t) l].load() : -1;
+        if (h != heads[(size_t) l]) { heads[(size_t) l] = h; dirty = true; }
+    }
+    const int c = playing ? proc.engine.uiCount.load() : -1;
+    if (c != count) { count = c; dirty = true; }
     const uint32_t n = proc.engine.uiNotes.load();
     if (n != lastNotes) { lastNotes = n; flash = 1.0f; dirty = true; }
     else if (flash > 0.0f) { flash = flash < 0.04f ? 0.0f : flash * 0.72f; dirty = true; }
@@ -427,17 +445,16 @@ void PadGrid::paint (juce::Graphics& g)
 {
     using namespace thegrid;
     const int s = proc.editPattern();
-    const int L = proc.pattern.length (s);
-    const bool showHead = stepNow >= 0 && proc.engine.uiSlot.load() == s;
+    const bool showHead = count >= 0 && proc.engine.uiSlot.load() == s;
     const int root = 12 * (std::clamp (params.octave, 0, 6) + 2) + std::clamp (params.key, 0, 11);
 
-    // column numbers along the top, row starts down the side; the playhead's column and row lit
+    // step numbers along the top, the master count lit
     const auto hf = mono (11.0f).withExtraKerningFactor (0.08f);
     for (int c = 0; c < kCols; ++c)
     {
         const auto r = cell (c);
         const auto top = juce::Rectangle<float> (r.getX(), 0.0f, r.getWidth(), kHeadH - 4.0f);
-        if (showHead && stepNow % kCols == c)
+        if (showHead && count == c)
         {
             litBlock (g, top.reduced (14.0f, 3.0f), col::ice, 0.9f);
             g.setColour (col::tube);
@@ -447,29 +464,46 @@ void PadGrid::paint (juce::Graphics& g)
         else
             glowText (g, juce::String (c + 1), top, juce::Justification::centred, hf, col::ice, c % 4 == 0 ? 0.75f : 0.4f);
     }
-    for (int row = 0; row < kRows; ++row)
+    glowText (g, "LEN", { laneLength (0).getX(), 0.0f, kLaneW, kHeadH - 4.0f }, juce::Justification::centred, hf, col::coral, 0.75f);
+
+    // each lane: its number on the left (coral and crossed when muted), its length on the right
+    for (int l = 0; l < kLanes; ++l)
     {
-        const auto r = cell (row * kCols);
-        const auto side = juce::Rectangle<float> (0.0f, r.getY(), kLabelW - 8.0f, r.getHeight());
-        const bool lit = showHead && stepNow / kCols == row;
-        if (lit)
+        const auto side = laneLabel (l);
+        const bool muted = proc.pattern.muted (s, l);
+        const bool overLabel = side.contains (mousePos) && isMouseOver();
+        if (muted)
         {
-            litBlock (g, side.reduced (2.0f, 16.0f), col::ice, 0.9f);
+            litBlock (g, side.reduced (4.0f, 14.0f), col::coral, 0.9f);
             g.setColour (col::tube);
-            g.setFont (hf);
-            g.drawText (juce::String (row * kCols + 1), side, juce::Justification::centred, false);
+            g.setFont (mono (12.0f));
+            g.drawText ("M", side, juce::Justification::centred, false);
         }
         else
-            glowText (g, juce::String (row * kCols + 1), side, juce::Justification::centred, hf, col::ice, row * kCols < L ? 0.6f : 0.2f);
+        {
+            if (overLabel) glowBox (g, side.reduced (4.0f, 14.0f), 1.0f, col::ice, 0.6f);
+            glowText (g, juce::String (l + 1), side, juce::Justification::centred, mono (14.0f), col::ice, 0.8f);
+        }
+
+        const auto lr = laneLength (l);
+        const int len = proc.pattern.length (s, l);
+        if (lr.contains (mousePos) && isMouseOver())
+        {
+            g.setColour (col::coral.withAlpha (0.10f));
+            g.fillRect (lr);
+        }
+        glowBox (g, lr, 1.1f, col::coral, len < kCols ? 0.9f : 0.5f);
+        glowText (g, juce::String (len), lr, juce::Justification::centred, mono (16.0f), col::coral, len < kCols ? 1.0f : 0.7f);
     }
 
     const auto valueFont = mono (12.0f);
     for (int st = 0; st < kSteps; ++st)
     {
+        const int lane = st / kCols, pos = st % kCols;
         const auto r = cell (st);
-        const bool inLen = st < L;
+        const bool inLen = pos < proc.pattern.length (s, lane);
         const bool on = proc.pattern.on (s, st);
-        const bool here = showHead && st == stepNow;
+        const bool here = showHead && heads[(size_t) lane] == pos;
         const bool over = st == hover;
 
         if (! inLen)
@@ -589,16 +623,27 @@ void PadGrid::paint (juce::Graphics& g)
             litBlock (g, { r.getRight() - 3.0f, r.getY() + 14.0f, 3.0f, r.getHeight() - 28.0f }, col::coral, 0.9f);
     }
 
-    // where the pattern ends
+    // where each lane ends, and a veil over muted lanes
+    for (int l = 0; l < kLanes; ++l)
     {
-        const auto r = cell (L - 1);
-        juce::Path b;
-        const float x = r.getRight() + kGap * 0.5f;
-        b.startNewSubPath (x - 5.0f, r.getY() - 2.0f);
-        b.lineTo (x, r.getY() - 2.0f);
-        b.lineTo (x, r.getBottom() + 2.0f);
-        b.lineTo (x - 5.0f, r.getBottom() + 2.0f);
-        glowStroke (g, b, 1.8f, col::coral, 1.0f);
+        const int len = proc.pattern.length (s, l);
+        if (len < kCols)
+        {
+            const auto r = cell (l * kCols + len - 1);
+            juce::Path b;
+            const float x = r.getRight() + kGap * 0.5f;
+            b.startNewSubPath (x - 5.0f, r.getY() - 2.0f);
+            b.lineTo (x, r.getY() - 2.0f);
+            b.lineTo (x, r.getBottom() + 2.0f);
+            b.lineTo (x - 5.0f, r.getBottom() + 2.0f);
+            glowStroke (g, b, 1.8f, col::coral, 1.0f);
+        }
+        if (proc.pattern.muted (s, l))
+        {
+            const auto a = cell (l * kCols), z = cell (l * kCols + kCols - 1);
+            g.setColour (col::tube.withAlpha (0.6f));
+            g.fillRect (a.getUnion (z).expanded (2.0f));
+        }
     }
 }
 
@@ -608,6 +653,24 @@ int PadGrid::cellAt (juce::Point<float> p) const
         if (cell (s).expanded (kGap * 0.5f).contains (p))
             return s;
     return -1;
+}
+
+int PadGrid::laneAt (juce::Point<float> p, bool lengthStrip) const
+{
+    for (int l = 0; l < thegrid::kLanes; ++l)
+        if ((lengthStrip ? laneLength (l) : laneLabel (l)).expanded (2.0f, kGap * 0.5f).contains (p))
+            return l;
+    return -1;
+}
+
+void PadGrid::setLaneLength (int lane, int n)
+{
+    const int s = proc.editPattern();
+    n = juce::jlimit (1, thegrid::kCols, n);
+    if (n == proc.pattern.length (s, lane)) return;
+    proc.pattern.setLength (s, lane, n);
+    proc.patternEdited();
+    repaint();
 }
 
 void PadGrid::setLock (int st, int value)
@@ -654,15 +717,35 @@ void PadGrid::paintCell (int st)
 
 void PadGrid::mouseDown (const juce::MouseEvent& e)
 {
-    dragCell = cellAt (e.position);
     painting = false;
-    if (dragCell < 0) return;
+    laneDrag = -1;
     const int s = proc.editPattern();
 
-    // ALT: the pattern ends here
+    // a lane's number: mute it or bring it back
+    if (const int l = laneAt (e.position, false); l >= 0)
+    {
+        proc.pattern.setMute (s, l, ! proc.pattern.muted (s, l));
+        proc.patternEdited();
+        dragCell = -1;
+        repaint();
+        return;
+    }
+    // a lane's length: drag it
+    if (const int l = laneAt (e.position, true); l >= 0)
+    {
+        laneDrag = l;
+        laneDragStart = proc.pattern.length (s, l);
+        dragCell = -1;
+        return;
+    }
+
+    dragCell = cellAt (e.position);
+    if (dragCell < 0) return;
+
+    // ALT: this lane ends here
     if (e.mods.isAltDown())
     {
-        proc.pattern.setLength (s, dragCell + 1);
+        proc.pattern.setLength (s, dragCell / thegrid::kCols, dragCell % thegrid::kCols + 1);
         proc.patternEdited();
         dragCell = -1;
         repaint();
@@ -704,6 +787,11 @@ void PadGrid::mouseDown (const juce::MouseEvent& e)
 
 void PadGrid::mouseDrag (const juce::MouseEvent& e)
 {
+    if (laneDrag >= 0)
+    {
+        setLaneLength (laneDrag, laneDragStart + juce::roundToInt ((float) -e.getDistanceFromDragStartY() / 10.0f));
+        return;
+    }
     if (dragCell < 0) return;
     if (painting)
     {
@@ -734,29 +822,40 @@ void PadGrid::mouseDrag (const juce::MouseEvent& e)
 void PadGrid::mouseUp (const juce::MouseEvent&)
 {
     dragCell = -1;
+    laneDrag = -1;
     painting = false;
 }
 
 void PadGrid::mouseDoubleClick (const juce::MouseEvent& e)
 {
+    if (const int l = laneAt (e.position, true); l >= 0) { setLaneLength (l, thegrid::kCols); return; }
     const int st = cellAt (e.position);
     if (st < 0 || page == Page::step || page == Page::tie || e.mods.isAltDown() || e.mods.isCommandDown())
         return;
-    setLock (st, thegrid::kLockDef[lock()]);
+    setLock (st, thegrid::Pattern::defaultFor (lock(), st));
 }
 
 void PadGrid::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w)
 {
+    if (std::abs (w.deltaY) <= 0.0f) return;
+    if (const int l = laneAt (e.position, true); l >= 0)
+    {
+        setLaneLength (l, proc.pattern.length (proc.editPattern(), l) + (w.deltaY > 0.0f ? 1 : -1));
+        return;
+    }
     const int st = cellAt (e.position);
-    if (st < 0 || page == Page::step || page == Page::tie || std::abs (w.deltaY) <= 0.0f)
+    if (st < 0 || page == Page::step || page == Page::tie)
         return;
     nudge (st, w.deltaY > 0.0f ? 1 : -1);
 }
 
 void PadGrid::mouseMove (const juce::MouseEvent& e)
 {
+    const bool wasOnLane = laneAt (mousePos, false) >= 0 || laneAt (mousePos, true) >= 0;
+    mousePos = e.position;
+    const bool onLane = laneAt (mousePos, false) >= 0 || laneAt (mousePos, true) >= 0;
     const int st = cellAt (e.position);
-    if (st != hover) { hover = st; repaint(); }
+    if (st != hover || wasOnLane || onLane) { hover = st; repaint(); }
 }
 
 void PadGrid::mouseExit (const juce::MouseEvent&)
@@ -767,8 +866,10 @@ void PadGrid::mouseExit (const juce::MouseEvent&)
 
 juce::String PadGrid::getTooltip()
 {
+    if (const int l = laneAt (mousePos, false); l >= 0) return "LANE " + juce::String (l + 1) + ": CLICK TO MUTE OR UNMUTE";
+    if (const int l = laneAt (mousePos, true); l >= 0) return "LANE " + juce::String (l + 1) + " LENGTH: DRAG OR SCROLL, 1 TO 16. DOUBLE-CLICK FOR 16";
     if (hover < 0) return {};
-    const juce::String step = "STEP " + juce::String (hover + 1) + ": ";
+    const juce::String step = "LANE " + juce::String (hover / thegrid::kCols + 1) + ", STEP " + juce::String (hover % thegrid::kCols + 1) + ": ";
     switch (page)
     {
         case Page::step:    return step + "CLICK ON OR OFF, DRAG TO PAINT";
@@ -849,7 +950,7 @@ void Glass::paint (juce::Graphics& g)
         { "MANNERS! DSP  INTERFACE SYSTEM", col::cream },
         { "", col::cream },
         { "THE GRID  STEP SEQUENCER", col::ice },
-        { "PADS ........................ 8 X 16", col::ice },
+        { "LANES ....................... 8 X 16", col::ice },
         { "LOCKS PER STEP .............. 7", col::ice },
         { "DICE ........................ LOADED", col::coral },
         { "SWING ....................... OPTIONAL", col::coral },
@@ -885,7 +986,7 @@ void Glass::paint (juce::Graphics& g)
 //==============================================================================
 namespace
 {
-    constexpr int kGridX = (GridEditor::kBaseW - PadGrid::kW) / 2;   // 72
+    constexpr int kGridX = (GridEditor::kBaseW - PadGrid::kW) / 2;   // 39
     constexpr int kGridY = 152;
     constexpr int kMidY = kGridY + PadGrid::kH + 12;                 // the pattern row
     constexpr int kBoxY = kMidY + 60;                                 // the three boxes
@@ -919,7 +1020,7 @@ void GridEditor::Face::paint (juce::Graphics& g)
     box ({ 342.0f, by, 556.0f, bh }, "PLAY", col::coral);
     box ({ 914.0f, by, 300.0f, bh }, "OUTPUT", col::ice);
 
-    glowText (g, "SHIFT-DRAG: PAINT A VALUE   CMD-CLICK: STEP ON/OFF   ALT-CLICK: PATTERN ENDS HERE   DOUBLE-CLICK: RESET THE LOCK",
+    glowText (g, "SHIFT-DRAG: PAINT A VALUE   CMD-CLICK: STEP ON/OFF   ALT-CLICK: LANE ENDS HERE   DOUBLE-CLICK: RESET THE LOCK",
               { 20.0f, (float) kBaseH - 20.0f, (float) kBaseW - 40.0f, 16.0f },
               juce::Justification::centred, mono (11.0f).withExtraKerningFactor (0.06f), col::cream, 0.55f);
 }
@@ -963,7 +1064,7 @@ GridEditor::GridEditor (GridProcessor& p)
     pages[0].setToggleState (true, juce::dontSendNotification);
 
     face.addAndMakeVisible (length);
-    length.setBounds (kGridX + PadGrid::kW - 312, 108, 300, 36);
+    length.setBounds (kGridX + PadGrid::kW - 300, 108, 300, 36);
 
     face.addAndMakeVisible (grid);
     grid.setBounds (kGridX, kGridY, PadGrid::kW, PadGrid::kH);

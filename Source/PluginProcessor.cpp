@@ -162,10 +162,18 @@ void GridProcessor::patternEdited()
 
 juce::ValueTree GridProcessor::patternToTree (int s) const
 {
-    // one property per lock, 128 values each, comma separated
+    // one property per lock, 128 values each (lane by lane, sixteen steps a lane), comma separated
     juce::ValueTree t ("GRIDPATTERN");
-    t.setProperty ("format", 1, nullptr);
-    t.setProperty ("length", pattern.length (s), nullptr);
+    t.setProperty ("format", 2, nullptr);
+    juce::String lens, mutes;
+    for (int l = 0; l < kLanes; ++l)
+    {
+        if (l > 0) { lens << ","; mutes << ","; }
+        lens << pattern.length (s, l);
+        mutes << (pattern.muted (s, l) ? 1 : 0);
+    }
+    t.setProperty ("lengths", lens, nullptr);
+    t.setProperty ("mutes", mutes, nullptr);
     for (int l = 0; l < kNumLocks; ++l)
     {
         juce::String v;
@@ -189,9 +197,15 @@ bool GridProcessor::patternFromTree (int s, const juce::ValueTree& t)
         const auto key = juce::String (kLockName[l]).toLowerCase();
         const auto vals = juce::StringArray::fromTokens (t.getProperty (key).toString(), ",", {});
         for (int st = 0; st < kSteps; ++st)
-            pattern.set ((Lock) l, s, st, st < vals.size() ? vals[st].getIntValue() : kLockDef[l]);
+            pattern.set ((Lock) l, s, st, st < vals.size() ? vals[st].getIntValue() : Pattern::defaultFor ((Lock) l, st));
     }
-    pattern.setLength (s, (int) t.getProperty ("length", 16));
+    const auto lens = juce::StringArray::fromTokens (t.getProperty ("lengths").toString(), ",", {});
+    const auto mutes = juce::StringArray::fromTokens (t.getProperty ("mutes").toString(), ",", {});
+    for (int l = 0; l < kLanes; ++l)
+    {
+        pattern.setLength (s, l, l < lens.size() ? lens[l].getIntValue() : 16);
+        pattern.setMute (s, l, l < mutes.size() && mutes[l].getIntValue() != 0);
+    }
     patternEdited();
     return true;
 }

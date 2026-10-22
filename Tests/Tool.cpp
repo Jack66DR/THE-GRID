@@ -1,5 +1,5 @@
 // THEGRID_Tool
-//   midi <out.mid> [starter|brown|long]             runs 8 bars at 110 BPM through the full plugin, writes what comes out as a MIDI file
+//   midi <out.mid> [starter|brown|busy]             runs 8 bars at 110 BPM through the full plugin, writes what comes out as a MIDI file
 //   snapshot <out.png> [step|note|vel|gate|chance|ratchet|tie|boot]   renders the editor to a PNG for a layout check
 
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -28,25 +28,30 @@ static void set (GridProcessor& proc, const juce::String& id, float v)
         p->setValueNotifyingHost (p->convertTo0to1 (v));
 }
 
-// a longer pattern with every kind of lock on it, for looking at
+// a busy pattern with every kind of lock on it, chords, and lanes of different lengths, for looking at
 static void showcase (thegrid::Pattern& pat)
 {
     using namespace thegrid;
-    pat.clear (0);
-    pat.setLength (0, 48);
-    const int notes[] = { 0, 3, 7, 10, 12, 15, 14, 10, 7, 5, 3, 2 };
-    for (int s = 0; s < 48; ++s)
+    pat.starter (0);
+    // lane 2: a counter-line, 12 long
+    const int line[] = { 17, 19, 22, 24, 22, 19 };
+    for (int s = 0; s < 12; s += 2)
     {
-        if (s % 3 == 2 && s % 5 != 0) continue;
-        pat.set (lkOn, 0, s, 1);
-        pat.set (lkNote, 0, s, notes[s % 12] + (s >= 32 ? 12 : 0));
-        pat.set (lkVel, 0, s, 60 + (s * 37) % 68);
-        pat.set (lkGate, 0, s, 25 + (s * 13) % 76);
+        const int c = Pattern::cell (2, s);
+        pat.set (lkOn, 0, c, 1);
+        pat.set (lkNote, 0, c, line[s / 2]);
+        pat.set (lkVel, 0, c, 70 + s * 4);
+        pat.set (lkGate, 0, c, 30 + s * 5);
     }
-    for (int s : { 4, 13, 22, 40 }) pat.set (lkChance, 0, s, 35 + s);
-    for (int s : { 6, 19, 33 }) pat.set (lkRatchet, 0, s, 2 + s % 4);
-    for (int s : { 9, 24, 36 }) { pat.set (lkTie, 0, s, 1); pat.set (lkOn, 0, s + 1, 1); }
-    pat.set (lkOn, 0, 70, 1);   // past the end: shown dim
+    pat.setLength (0, 2, 12);
+    // lane 6: a fifth under the bass, every beat, with a maybe and a ratchet
+    for (int s = 0; s < 16; s += 4) pat.set (lkOn, 0, Pattern::cell (6, s), 1);
+    pat.set (lkChance, 0, Pattern::cell (6, 8), 40);
+    pat.set (lkRatchet, 0, Pattern::cell (6, 12), 2);
+    // lane 3: five long, muted
+    for (int s = 0; s < 5; ++s) pat.set (lkOn, 0, Pattern::cell (3, s), s % 2 == 0 ? 1 : 0);
+    pat.setLength (0, 3, 5);
+    pat.setMute (0, 3, true);
     ++pat.version;
 }
 
@@ -59,7 +64,7 @@ static int midi (const juce::File& out, const juce::String& look)
     proc.setPlayHead (&tr);
     proc.setPlayConfigDetails (0, 0, sr, block);
     if (look == "brown") { set (proc, ParamIDs::dir, (float) thegrid::dirBrown); set (proc, ParamIDs::seed, 1.0f); }
-    if (look == "long") showcase (proc.pattern);
+    if (look == "busy") showcase (proc.pattern);
     proc.prepareToPlay (sr, block);
 
     juce::MidiMessageSequence seq;
@@ -140,7 +145,7 @@ int main (int argc, char** argv)
 {
     if (argc < 3)
     {
-        std::printf ("usage: THEGRID_Tool midi <out.mid> [starter|brown|long]\n"
+        std::printf ("usage: THEGRID_Tool midi <out.mid> [starter|brown|busy]\n"
                      "       THEGRID_Tool snapshot <out.png> [step|note|vel|gate|chance|ratchet|tie|boot]\n");
         return 2;
     }
